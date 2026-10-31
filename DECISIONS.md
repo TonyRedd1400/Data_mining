@@ -63,11 +63,12 @@ en `docs/adr/`.
 - Consecuencias: mantenimiento manual del mapeo si cambian las APIs; contenido en tests de contrato con fixtures grabados. Si pesa, se cambia solo el adaptador.
 
 ## D-009 · Cuenteo de "20 elegibles" sobre elegibilidad determinista; LLM califica después
-**Estado: Propuesta (requiere aprobación — ligado a A-2)**
+**Estado: Propuesta (requiere aprobación del usuario — ligado a A-2, revisión C-03)**
 - Contexto: ambigüedad: ¿20 resultados devueltos, 20 relevantes según LLM, o 20 elegibles por reglas?
-- Decisión propuesta: elegibilidad por reglas (URL válida, no dup, no bloqueado, patrones) define el cupo; la irrelevancia LLM se registra como `rejected` posterior y `eligible_count` queda como dato operativo + `accepted_count` como dato analítico.
-- Alternativas: filtrar por LLM antes de contar (consume 3× cuota LLM y hace el cupo dependiente del modelo — frágil).
-- Consecuencias: dos contadores conviven; la exportación muestra ambos. **Debe confirmarse la semántica esperada del proyecto.**
+- Decisión propuesta: elegibilidad por reglas (URL válida, no dup, no bloqueado, patrones) define el cupo; la irrelevancia LLM se registra como `rejected` posterior y `eligible_count` queda como dato operativo + `accepted_count` como dato analítico. **Consecuencia explícita:** una BQ puede exportar menos de 20 filas *aceptadas* si el LLM rechaza; eso no se considera incumplimiento con esta semántica, sino señal de demanda escasa.
+- Alternativa B (si el usuario la elige): seguir paginando hasta reunir 20 **aceptados** por el LLM (o agotar tope duro de páginas/crudos). Consecuencias: más llamadas de búsqueda y clasificación por BQ, cupo dependiente del modelo, resultados menos reproducibles entre corridas; requiere subir `max_raw_pages_per_bq` y redefinir AT-09/AT-01-4.
+- Alternativas descartadas: contar los 20 crudos devueltos sin filtro (mezcla basura en el cupo).
+- Consecuencias: dos contadores conviven; la exportación muestra ambos. **El usuario debe elegir A (propuesta) o B antes del Hito 3**, donde se implementa la lógica de paginación/conteo.
 
 ## D-010 · Hallazgo = síntesis por BQ generada por LLM, estado `draft` hasta validación humana
 **Estado: Propuesta (ligado a A-6)**
@@ -116,13 +117,32 @@ en `docs/adr/`.
 
 ---
 
+# Registro de correcciones de diseño (revisión externa 2026-10-31)
+
+| ID | Severidad | Problema detectado | Corrección aplicada | Documentos tocados | Prueba de resolución |
+|---|---|---|---|---|---|
+| C-01 | Bloqueante | Truncamiento de `snippet_raw` a 2000 chars perdía el texto original y rompía la promesa de verbatim/hash íntegro. | Se elimina todo tope de snippet en persistencia: columna NOT NULL completa, hash sobre texto íntegro, truncamiento solo posible en export con flag; triggers ampliados. | SPEC RF-03; DATA_MODEL §2.2/§5; ARCHITECTURE §8 límites | AT-03 ampliado (fixture >2000 chars) |
+| C-02 | Alta | Inconsistencia UNIQUE `raw_results`: DATA_MODEL usaba `url_raw`, ARCHITECTURE `url_norm`; permitía crudos duplicados de la misma URL lógica. | Clave natural unificada en `(bq_id, provider, page, rank_position, url_norm)` con índice único explícito; `url_raw` verbatim se conserva como columna aparte. | DATA_MODEL §2.2/§5; ARCHITECTURE §6; SPEC RF-18 | AT-07 ampliado (misma URL, distintos parámetros de tracking) |
+| C-03 | Alta | Semántica de "20 elegibles" ambigua sin consecuencias documentadas. | A-2/D-009 explicitan las dos alternativas (A: elegibles por reglas, aceptados pueden ser <20; B: paginar hasta 20 aceptados) y su impacto en cuota/reproducción; se marca punto de decisión obligatorio antes del Hito 3. | SPEC §10 A-2; DECISIONS D-009 + pendientes | AT-09 versión A + AT-09B condicional |
+| C-04 | Media | Faltaba restricción de BD que garantizara un solo `is_current=1` por `(result_id, prompt_version)`. | Añadido índice único parcial `ux_classifications_current ... WHERE is_current = 1`. | DATA_MODEL §2.6/§5 | AT-04 ampliado (segunda vigente → error de BD esperado) |
+| C-05 | Alta | Requisito de uso por persona no técnica sin mecanismo concreto (solo CLI/edición de archivos). | Nuevos mecanismos dentro de alcance: scripts PowerShell de un paso, menú de consola `dlm menu`, guía con capturas; RF-19; hitos de plan actualizados. | SPEC §3.1/RF-19; IMPLEMENTATION_PLAN Hitos 1/9; README | AT-18 (prueba de usabilidad) |
+| C-06 | Media | RNF-07 (duración) y RNF-08 (privacidad) sin prueba asociada. | Añadidos AT-16 (medición de duración reportada por el propio run) y AT-17 (auditoría de fixtures/privacidad); matriz requisito→prueba actualizada. | ACCEPTANCE_TESTS | AT-16, AT-17 |
+| C-07 | Media | Nombres de propiedades Notion sin confirmar bloqueaba formato final del export. | El mapping se declara entrada obligatoria del Hito 6 con fallback explícito (encabezados contractuales internos + renombrado por `notion_mapping.yaml` al confirmar); gate añadido al plan. | DECISIONS D-012 + pendientes; IMPLEMENTATION_PLAN Hito 6; SPEC A-5 | AT-12 con copia real de base Notion (datos mock) |
+| C-08 | Media | Cuotas gratuitas Brave/Gemini sin validar podían romper el ciclo completo. | Gate de validación de cuotas antes del Hito 7 con medición real por BQ (`quota_usage`), proyección 24 BQ y criterio de parada/rediseño; defaults marcados provisionales. | DECISIONS D-003/D-004/D-013 + pendientes; IMPLEMENTATION_PLAN Hito 7 pre-check | Medición live 1 BQ vs presupuesto; registro en `docs/pilot-report.md` |
+
+Nota de proceso: estas correcciones editan el diseño (fase pre-código); cuando exista `docs/adr/`,
+cada corrección con cambio de decisión se reflejará como ADR complementario, sin reescribir los
+ADRs originales.
+
+---
+
 ## Registro de pendientes ligadas a decisiones
 
-| ID | Pendiente | Bloquea |
-|---|---|---|
-| A-1 | Recibir las 24 consultas literales | queries.yaml real, AT-02 live |
-| A-2 | Semántica exacta de "20 elegibles" | D-009 |
-| A-3 | Cuota vigente Brave free | D-013 defaults |
-| A-4 | Términos free tier Gemini para este uso | D-004 |
-| A-5 | Nombres de propiedades de las bases Notion | D-012 mapping |
-| A-6 | Definición canónica de "hallazgo" | D-010 |
+| ID | Pendiente | Bloquea | Gate / fecha límite |
+|---|---|---|---|
+| A-1 | Recibir las 24 consultas literales | queries.yaml real, AT-02 live | Antes del Hito 7 (corrida real) |
+| A-2 | Semántica exacta de "20 elegibles" — elegir Alternativa A o B (ver D-009/C-03) | D-009; lógica de paginación y conteo | **Antes del Hito 3** (implementación de elegibilidad/conteo) |
+| A-3 | Cuota vigente Brave free (confirmar en la cuenta real) | D-013 defaults (`max_daily_provider_calls` provisional) | Pre-check obligatorio del Hito 7: corrida live de 1 BQ + proyección 24 BQ documentada en `docs/pilot-report.md`; si no cabe, activar adaptador alternativo antes de continuar |
+| A-4 | Términos free tier Gemini para este uso | D-004 | Pre-check del Hito 8: lectura de términos vigente + piloto 2–3 BQ; fallback a otro adaptador documentado |
+| A-5 | Nombres reales de propiedades de las bases Notion | D-012 mapping final | **Entrada requerida del Hito 6**; mientras tanto el export usa encabezados contractuales internos y `notion_mapping.yaml` queda pendiente (no bloquea AT-01…AT-11) |
+| A-6 | Definición canónica de "hallazgo" | D-010 | Antes del Hito 6 |

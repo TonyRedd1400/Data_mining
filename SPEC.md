@@ -1,6 +1,6 @@
 # SPEC.md — Sistema local de investigación de demanda (Directorio Laboral México)
 
-Versión: 1.0 (diseño MVP) · Fecha: 2026-10-31 · Rama: `feature/bq-research-pipeline`
+Versión: 1.1 (diseño MVP; revisión C-01…C-08) · Fecha: 2026-10-31 · Rama: `feature/bq-research-pipeline`
 
 ---
 
@@ -34,7 +34,7 @@ Fuera del alcance (explícito):
 
 - Scraping masivo de Google o de cualquier motor; evasión de captchas, autenticación, robots.txt o restricciones técnicas.
 - Verificación/crawl profundo del contenido de cada página (leer la página completa, extraer precios, etc.). Solo se usa lo que devuelve la API de búsqueda.
-- Multiusuario, servidor web, interfaz gráfica, base de datos cliente-servidor, orquestación en la nube.
+- Multiusuario, servidor web, interfaz gráfica, base de datos cliente-servidor, orquestación en la nube. (No aplica a los mecanismos ligeros de soporte al operador no técnico definidos en §3.1: scripts PowerShell, menú de consola y guía con capturas — que sí están dentro del alcance.)
 - Escritura automática en Notion (la exportación es manual/semi-manual vía CSV/XLSX en el MVP).
 - Programación recurrente (cron/agendador). La ejecución es manual por comando.
 - Análisis estadístico, dashboards, visualizaciones.
@@ -48,6 +48,26 @@ Fuera del alcance (explícito):
 |---|---|
 | Operador único | Persona que ejecuta el pipeline en su máquina Windows, configura claves, revisa la cola y exporta. |
 | Revisor humano | Puede ser el mismo operador; decide sobre los ítems en `needs_review`. |
+
+### 3.1 Soporte al operador no técnico (corrección C-05)
+
+El MVP no tendrá UI gráfica, pero la operación no puede depender de que el usuario conozca CLI ni
+edite YAML a ciegas. Se incorporan tres mecanismos, todos dentro del alcance:
+
+1. **Scripts PowerShell de un doble clic / una línea** (`scripts/`): `setup.ps1` (venv +
+   dependencias + copia de `.env.example`), `run_mock.ps1`, `run_completo.ps1`,
+   `revision_export.ps1`, `revision_import.ps1`, `exportar.ps1`. Cada script invoca los comandos
+   `dlm` correspondientes y muestra el resultado en lenguaje natural con instrucciones del siguiente
+   paso.
+2. **Menú interactivo en consola**: `python -m dlm menu` presenta opciones numeradas (1 Ejecutar
+   búsqueda … 8 Exportar) — para operar sin memorizar banderas; Internamente llama a los mismos
+   comandos (no hay lógica duplicada).
+3. **Guía paso a paso con capturas** (`docs/GUIA_OPERACION.md`, producida en el Hito 9): instalación,
+   primer ciclo mock, revisión humana por CSV, exportación e importación en Notion, troubleshooting
+   de cuotas. Los mensajes de error del CLI siguen la regla "qué pasó + qué hacer después" (§
+   ARCHITECTURE logging).
+
+Criterio de usabilidad verificable: AT-18.
 
 ## 4. Entradas
 
@@ -70,7 +90,7 @@ Fuera del alcance (explícito):
 |---|---|---|
 | RF-01 | Ejecutar las 24 BQ contra el proveedor configurado con country=MX, lang=es. | Must |
 | RF-02 | Capturar hasta 20 resultados elegibles por BQ; registrar `eligible_count` real aunque sea <20. | Must |
-| RF-03 | Conservar intactos: título, URL, snippet/texto original, posición, fecha/hora UTC de captura, consulta exacta, proveedor. Campos originales nunca se sobrescriben tras su inserción. | Must |
+| RF-03 | Conservar intactos: título, URL, snippet/texto original (completo, sin truncar en base — C-01), posición, fecha/hora UTC de captura, consulta exacta, proveedor. Campos originales nunca se sobrescriben tras su inserción. `content_hash` se calcula sobre el texto completo. | Must |
 | RF-04 | Clasificar cada resultado con LLM en campos separados (`llm_*`), sin tocar campos originales. | Must |
 | RF-05 | Detectar duplicados: intra-BQ y entre BQ; marcar `duplicate_of` sin eliminar el registro. | Must |
 | RF-06 | Encolar para revisión humana: confianza < umbral, clasificación inválida, duplicado dudoso, error LLM persistente. | Must |
@@ -85,7 +105,8 @@ Fuera del alcance (explícito):
 | RF-15 | Generar evidencia (fragmento citado + offset) y hallazgo (síntesis por BQ) derivados, nunca sustitutos, del resultado. | Should |
 | RF-16 | Registrar por qué un resultado devuelto por el proveedor **no** fue contado como elegible (motivo de descarte). | Should |
 | RF-17 | Comando único por etapa: `run search`, `run classify`, `run review list/resolve`, `run export`. | Must |
-| RF-18 | Toda escritura idempotente por clave natural `(provider, query_id, url_norm, position_bucket)` / hash de contenido. | Must |
+| RF-18 | Toda escritura idempotente por clave natural `(bq_id, provider, page, rank_position, url_norm)` (crudos) y `(bq_id, url_norm)` (resultados); hash de contenido para auditoría. | Must |
+| RF-19 | Soporte al operador no técnico (§3.1): scripts PowerShell de una línea, menú de consola `dlm menu` y guía paso a paso con capturas; el ciclo completo debe poder realizarse sin escribir comandos arbitrarios. | Must |
 
 ## 7. Requisitos no funcionales
 
@@ -126,7 +147,7 @@ Los 20 se cuentan sobre elegibles deterministas; el análisis de demanda usa los
 | # | Supuesto | Impacto si es falso |
 |---|---|---|
 | A-1 | Las 24 consultas literales de BQ-001…BQ-024 serán proporcionadas (archivo o tabla); este diseño asume que existen con id, consulta y sector. | Bloquea RF-01; `queries.yaml` quedaría con placeholders. |
-| A-2 | "20 resultados elegibles" significa paginar hasta reunir 20 elegibles deterministas (con tope duro de paginación de 60 resultados crudos por BQ por cuota). | Cambia lógica de conteo y consumo de cuota. |
+| A-2 | "20 resultados elegibles" significa paginar hasta reunir 20 elegibles deterministas (reglas §8), con tope duro de paginación de 60 resultados crudos por BQ por cuota. El rechazo posterior del LLM **no** reabre la búsqueda ni obliga a completar 20 aceptados; los contadores `eligible_count` y `accepted_count` se exportan ambos. Alternativa B documentada: seguir paginando hasta reunir 20 *aceptados* por el LLM (consume más cuota de búsqueda y LLM y hace el cupo dependiente del modelo). **Pendiente de confirmación del usuario (revisión C-03); ver D-009.** | Cambia lógica de conteo, paginación y consumo de cuota. |
 | A-3 | Brave Search API tier gratuito vigente es suficiente (~2,000 búsquedas/mes en el plan histórico). Alternativa documentada: SearxNG autohospedado o Serper.dev. | Si la cuota real difiere, ajustar `max_daily_calls`. |
 | A-4 | Gemini API Free permite uso de clasificación automatizada bajo sus términos para este fin (uso personal/interno, no redistribución de salidas como dato primario). | Podría exigir otro adaptador LLM. |
 | A-5 | Las bases de Notion actuales aceptan importación CSV con estas columnas planas (sin relaciones automáticas); los nombres exactos de propiedades de Notion deben confirmarse para mapear encabezados. | Requiere ajustar mapa de exportación. |
