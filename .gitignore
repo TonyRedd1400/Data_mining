@@ -1,0 +1,26 @@
+# Entornos virtuales y artefactos de Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Secretos: NUNCA comitear .env real (repo público)
+.env
+.env.*
+!.env.example
+
+# Datos operativos del pipeline (no subir bases ni resultados crudos)
+data/
+exports/
+logs/
+*.db
+*.db-wal
+*.db-shm
+
+# IDE / SO
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
