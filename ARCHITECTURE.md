@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — Sistema local de investigación de demanda
 
-Versión: 1.0 · Fecha: 2026-10-31 · Companion de SPEC.md
+Versión: 1.1 (revisión C-01…C-08) · Fecha: 2026-10-31 · Companion de SPEC.md
 
 ---
 
@@ -45,7 +45,7 @@ Principios rectorales:
 
 | # | Componente | Responsabilidad | No hace |
 |---|---|---|---|
-| C1 | **CLI / Entry point** (`dlm`) | Parsear comandos y flags (`--mock`, `--bq BQ-007`, `--dry-run`), cargar config, invocar etapas, imprimir resumen, manejar Ctrl+C limpiamente. | Lógica de negocio. |
+| C1 | **CLI / Entry point** (`dlm`) | Parsear comandos y flags (`--mock`, `--bq BQ-007`, `--dry-run`), cargar config, invocar etapas, imprimir resumen, manejar Ctrl+C limpiamente. Incluye `dlm menu`: vista de menú numerado que despacha a estos mismos subcomandos para el operador no técnico (C-05/RFC RF-19). | Lógica de negocio. |
 | C2 | **Config Loader** | Fusionar `config/settings.yaml` + variables de entorno (`.env` vía carga simple); validar esquema; exponer objeto de configuración inmutable. | Guardar secretos fuera de env. |
 | C3 | **Query Catalog** | Leer `config/queries.yaml`; validar ids BQ-001…BQ-024 únicos; expeditar lista de BQ pendientes según estado en DB. | Llamar APIs. |
 | C4 | **Orchestrator (SearchStage)** | Por cada BQ pendiente: paginar al proveedor, aplicar elegibilidad, persistir resultados crudos+elegibles, actualizar estado BQ y `eligible_count`. Respetar rate limiter. | Clasificar; exportar. |
@@ -102,7 +102,7 @@ Identificadores y enlaces obligatorios en toda fila derivada:
 - `bq_id` en todo lo generado por una búsqueda.
 - `result_id` en clasificaciones, evidencias, revisiones y hallazgos (los hallazgos guardan `evidence_ids[]` serializado JSON).
 - Columnas exportadas que permiten reconstruir la cadena: `bq_id, query_text, url, position, captured_at_utc, provider, classification_id, llm_model, review_status`.
-- Hashes: `content_hash = sha256(lower(title)+url_norm+snippet)` para auditar que el original no cambió; verificación opcional `dlm verify`.
+- Hashes: `content_hash = sha256(title_raw ‖ \x1f ‖ url_raw ‖ \x1f ‖ snippet_raw)` sobre los campos **originales completos y verbatim** (sin lower(), sin normalizar, sin truncar — C-01; el separador `\x1f` evita colisiones de concatenación) para auditar que el original no cambió; verificación opcional `dlm verify`.
 
 ## 5. Separación original / derivado
 
@@ -116,8 +116,8 @@ DATA_MODEL.md §triggers. Las clasificaciones viven en tablas separadas con FK a
 
 ## 6. Idempotencia y reanudación
 
-1. **Claves naturales únicas**:
-   - `raw_results`: UNIQUE(`bq_id`, `provider`, `page`, `rank_position`, `url_norm`)
+1. **Claves naturales únicas** (todas sobre `url_norm`, corregido C-02 para que sea consistente con DATA_MODEL §2.2/§5):
+   - `raw_results`: UNIQUE(`bq_id`, `provider`, `page`, `rank_position`, `url_norm`) — la URL normalizada evita crudos duplicados de la misma URL lógica cuando cambian los parámetros de tracking entre páginas o corridas; `url_raw` verbatim sigue almacenándose como columna inmutable aparte.
    - `results`: UNIQUE(`bq_id`, `url_norm`) — un resultado cuenta una vez por BQ.
    - `classifications`: UNIQUE(`result_id`, `prompt_version`, `model_id`) — re-clasificar crea versión nueva, no borra.
    - Inserciones con `INSERT ... ON CONFLICT DO NOTHING` ⇒ reejecución no duplica.
@@ -155,7 +155,7 @@ Límites globales (defaults en `settings.yaml`):
 - `min_call_interval_sec: 1.2`, `max_daily_provider_calls: 100`, `max_daily_llm_calls: 500`
 - `http_timeout_sec: 10`, `llm_max_output_tokens` fijo por modelo
 - `confidence_accept: 0.75`, `confidence_reject: 0.35` (entre ambos → revisión)
-- Tope de tamaño de snippet almacenado: 2000 chars (truncado con flag `truncated=1`, original del proveedor conservado tal cual hasta el tope).
+- **Sin tope de almacenamiento de snippets (C-01):** `raw_results.snippet_raw` guarda el texto completo verbatim; no se trunca nada en la capa de persistencia. El único truncamiento con flag (`export_truncated`) ocurre, si acaso, en la capa de exportación para legibilidad, y nunca afecta a la base ni al hash. Los payloads de auditoría LLM (`llm_payloads`) sí tienen tope de 4 KB porque son copia de conveniencia, no original.
 
 Política general: **un fallo nunca detiene las 24 BQ completas**; el pipeline degrada a `partial`
 y reporta al final cuántas BQ quedaron pendientes de reintentar.
@@ -230,11 +230,16 @@ La importación aplica decisiones por `review_id` y genera `review_events` (appe
 ├── data/                     # pipeline.db  (gitignored)
 ├── exports/                  # salidas (gitignored)
 ├── logs/                     # ndjson (gitignored)
+├── scripts/                  # PowerShell de un paso para operador no técnico (C-05): setup.ps1, run_mock.ps1, run_completo.ps1, revision_export.ps1, revision_import.ps1, exportar.ps1
 ├── tests/
 │   ├── fixtures/             # respuestas mock anonimizadas (sí versionadas)
 │   ├── unit/  integration/  acceptance/
 └── docs/adr/                 # ADR espejo resumido de DECISIONS.md
+    └── GUIA_OPERACION.md     # guía paso a paso con capturas (Hito 9, C-05)
 ```
+
+Nota sobre `dlm menu` (C-05): el menú interactivo de consola vive en `cli.py` como una vista delgada
+que despacha a los mismos subcomandos; no introduce lógica nueva ni dependencias.
 
 ## 11. Dependencias (pocas, deliberadamente)
 

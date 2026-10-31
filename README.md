@@ -10,8 +10,8 @@ Estado actual: **fase de diseño** (sin código de producto todavía).
 | [SPEC.md](SPEC.md) | Alcance, requisitos funcionales/no funcionales, elegibilidad, supuestos pendientes |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Componentes, flujo de datos, contratos, errores, idempotencia, dedup, seguridad |
 | [DATA_MODEL.md](DATA_MODEL.md) | Tablas SQLite, máquinas de estado, inmutabilidad, esquemas de exportación |
-| [DECISIONS.md](DECISIONS.md) | ADRs D-001…D-017 con estado (cerradas / propuestas) |
-| [ACCEPTANCE_TESTS.md](ACCEPTANCE_TESTS.md) | AT-01…AT-15 ejecutables en PowerShell (mayoría en modo mock) |
+| [DECISIONS.md](DECISIONS.md) | ADRs D-001…D-017 con estado (cerradas / propuestas) + registro de correcciones C-01…C-08 |
+| [ACCEPTANCE_TESTS.md](ACCEPTANCE_TESTS.md) | AT-01…AT-18 ejecutables en PowerShell (mayoría en modo mock) |
 | [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | Hitos 0–10, cada uno verificable |
 
 ## Reglas del proyecto
