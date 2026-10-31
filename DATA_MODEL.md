@@ -1,6 +1,6 @@
 # DATA_MODEL.md — Modelo de datos, estados y contratos de persistencia
 
-Versión: 1.0 · Fecha: 2026-10-31 · Motor: SQLite (archivo `data/pipeline.db`, WAL)
+Versión: 1.1 (revisión C-01…C-08) · Fecha: 2026-10-31 · Motor: SQLite (archivo `data/pipeline.db`, WAL)
 
 Convenciones: ids numéricos autoincrementales internos; claves naturales para idempotencia;
 UTC siempre (`TEXT` ISO-8601 `YYYY-MM-DDTHH:MM:SSZ`); JSON en `TEXT`; snake_case; prefijo
@@ -65,15 +65,26 @@ Idempotencia: fila creada por `INSERT OR IGNORE` desde YAML; reimportar YAML no 
 | title_raw | TEXT NOT NULL | **Verbatim**, sin trim interno ni normalización |
 | url_raw | TEXT NOT NULL | **Verbatim** como lo devolvió el proveedor |
 | display_url | TEXT | Verbatim si el proveedor la da |
-| snippet_raw | TEXT | **Verbatim**; truncado solo si >2000 chars con flag |
-| snippet_truncated | INTEGER 0/1 | |
+| snippet_raw | TEXT NOT NULL | **Verbatim, completo, sin truncar** — columna de texto íntegro; el sistema NO recorta, edita ni limita el original en ningún caso (corrección C-01) |
+| snippet_len | INTEGER | Longitud en caracteres de `snippet_raw` (derivada, para observación; nunca criterio de filtrado de contenido) |
 | site_name | TEXT NULL | |
 | language / country_requested | TEXT | `es` / `mx` al momento de la llamada |
 | captured_at_utc | TEXT NOT NULL | Momento de recepción |
-| content_hash | TEXT NOT NULL | sha256(title_raw‖url_raw‖snippet_raw) |
+| content_hash | TEXT NOT NULL | sha256(title_raw‖`\x1f`‖url_raw‖`\x1f`‖snippet_raw) sobre los campos **completos** |
 | response_ref | TEXT | request_id del proveedor (auditoría) |
 
-UNIQUE(`bq_id`,`provider`,`page`,`rank_position`,`url_raw`) ⇒ reejecución = `ON CONFLICT DO NOTHING`.
+**Política de integridad del original (C-01):** no existe tope de almacenamiento de snippets. SQLite
+soporta textos muy superiores a cualquier snippet real devuelto por un motor de búsqueda; el campo
+se guarda íntegro y `content_hash` se calcula sobre el texto completo. Cualquier exportación que
+necesite abreviar visualmente lo hace **solo en la capa de export**, marcando la celda con
+`export_truncated=1`, jamás en la base.
+
+**Clave natural de idempotencia (C-02):** UNIQUE(`bq_id`,`provider`,`page`,`rank_position`,`url_norm`)
+⇒ reejecución = `INSERT ... ON CONFLICT DO NOTHING`. `url_norm` es derivada (`url_raw` normalizado
+según ARCHITECTURE §7) y se calcula antes del insert. Usar `url_raw` en la clave permitiría filas
+crudas duplicadas de la misma URL lógica cuando el proveedor varía parámetros de tracking entre
+páginas/corridas; `url_norm` cierra ese hueco. El verbatim sigue garantizado porque `url_raw`
+permanece como columna separada inmutable.
 Trigger de inmutabilidad: ver §5.
 
 ### 2.3 `url_index` — normalización para deduplicación (derivada)
@@ -123,12 +134,24 @@ UNIQUE(`bq_id`,`url_norm`) WHERE `is_duplicate=0` ⇒ una URL cuenta una sola ve
 | llm_demand_signal | TEXT enum | strong/moderate/weak/none/unclear |
 | llm_relevance | REAL 0..1 | |
 | llm_confidence | REAL 0..1 | base del routing |
-| llm_rationale_es | TEXT ≤500 | justificación corta citando fragmentos existentes |
+| llm_rationale_es | TEXT ≤500 | justificación corta citando fragmentos existentes (límite aplica **solo a la salida del LLM**, campo derivado — nunca a datos originales) |
 | llm_raw_output_ref | TEXT | payload bruto guardado en `llm_payloads` |
 | classified_at | TEXT | |
 | is_current | INTEGER | última versión vigente (1 por result+prompt_version) |
 
 UNIQUE(`result_id`,`prompt_version`,`model_id`) ⇒ reclasificación crea nueva fila con otro `model_id`/versión o flip de `is_current`; jamás UPDATE destructivo.
+
+**Restricción de vigencia reforzada en BD (C-04):** además de la UNIQUE anterior y de la lógica de
+aplicación, existe un índice único parcial que garantiza a nivel de base de datos que no puede haber
+dos clasificaciones vigentes para el mismo resultado y versión de prompt:
+
+```sql
+CREATE UNIQUE INDEX ux_classifications_current
+  ON classifications(result_id, prompt_version) WHERE is_current = 1;
+```
+
+SQLite soporta índices parciales `WHERE`; si una segunda clasificación intenta quedar vigente, la
+BD rechaza la escritura aunque falle la lógica de aplicación.
 
 ### 2.7 `llm_payloads` — auditoría de ida/vuelta (truncate 4 KB, sin secretos)
 
@@ -257,16 +280,28 @@ Enum cerrado, validado en inserción (una reclasificación fuera de enum = `Sche
 
 ---
 
-## 5. Inmutabilidad reforzada (triggers SQLite)
+## 5. Inmutabilidad reforzada (triggers e índices SQLite)
 
 ```sql
 CREATE TRIGGER trg_raw_results_no_update BEFORE UPDATE OF
-  title_raw, url_raw, snippet_raw, rank_position, captured_at_utc, content_hash
+  title_raw, url_raw, display_url, snippet_raw, snippet_len,
+  rank_position, captured_at_utc, content_hash
 ON raw_results BEGIN SELECT RAISE(ABORT,'raw_results es inmutable'); END;
 
 CREATE TRIGGER trg_raw_results_no_delete BEFORE DELETE ON raw_results
   BEGIN SELECT RAISE(ABORT,'raw_results es append-only'); END;
+
+-- C-02: clave natural de idempotencia sobre URL normalizada (ver §2.2)
+CREATE UNIQUE INDEX ux_raw_results_natural
+  ON raw_results(bq_id, provider, page, rank_position, url_norm);
+
+-- C-04: como máximo una clasificación vigente por (result_id, prompt_version)
+CREATE UNIQUE INDEX ux_classifications_current
+  ON classifications(result_id, prompt_version) WHERE is_current = 1;
 ```
+
+`raw_results` incluye además la columna derivada `url_norm TEXT NOT NULL` (calculada en la inserción;
+protegida contra UPDATE junto con las demás en una segunda variante del trigger si se editara).
 
 (Análogo para `evidence.quote_text` y `review_events`.) Las columnas de estado/derivadas sí se
 actualizan, siempre acompañadas de historia (`query_state_hist` / `review_events`).
@@ -313,6 +348,12 @@ para renombrar encabezados sin tocar el núcleo — pendiente de nombres reales 
 
 - `PRAGMA user_version` como número de migración; scripts SQL incrementales en `src/dlm/db/migrations/`.
 - Cambios de esquema solo aditivos en el MVP; ruptura exige bump de `schema_version` por fila y script de respaldo previo (`dlm admin backup`).
+- **Nota para la implementación (aún no hay código):** las correcciones C-01/C-02/C-04 se incorporan
+  en la migración inicial del Hito 2 (`snippet_raw TEXT NOT NULL` sin tope, columna derivada
+  `url_norm`, UNIQUE natural sobre `url_norm`, índice parcial `ux_classifications_current`). Como el
+  pipeline todavía no existe, no se requiere migración correctiva ni re-cálculo de hashes; si al
+  implementarse ya hubiera bases de prueba con datos truncados, esas bases se descartan y se regeneran
+  en modo mock (los fixtures son deterministas).
 
 ## 8. Ejemplo de fila trazable (anonimizado, tipo fixture)
 
