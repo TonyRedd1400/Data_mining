@@ -1,0 +1,25 @@
+bq_id,company,family,query,country,language,max_results,provider
+BQ-001,Liverpool,Empleo en sistemas,trabajar en sistemas Liverpool,mx,es,20,brave
+BQ-002,Liverpool,Opiniones del área de TI,opiniones área de TI Liverpool,mx,es,20,brave
+BQ-003,Liverpool,Ambiente laboral en sistemas,ambiente laboral sistemas Liverpool,mx,es,20,brave
+BQ-004,Liverpool,Entrevista de sistemas,entrevista puesto de sistemas Liverpool,mx,es,20,brave
+BQ-005,Liverpool,Liderazgo de sistemas,jefe o gerente de sistemas Liverpool,mx,es,20,brave
+BQ-006,Liverpool,Decisión sobre oferta de TI,aceptar oferta de TI Liverpool,mx,es,20,brave
+BQ-007,Ford,Empleo en sistemas,trabajar en sistemas Ford,mx,es,20,brave
+BQ-008,Ford,Opiniones del área de TI,opiniones área de TI Ford,mx,es,20,brave
+BQ-009,Ford,Ambiente laboral en sistemas,ambiente laboral sistemas Ford,mx,es,20,brave
+BQ-010,Ford,Entrevista de sistemas,entrevista puesto de sistemas Ford,mx,es,20,brave
+BQ-011,Ford,Liderazgo de sistemas,jefe o gerente de sistemas Ford,mx,es,20,brave
+BQ-012,Ford,Decisión sobre oferta de TI,aceptar oferta de TI Ford,mx,es,20,brave
+BQ-013,Softtek,Empleo en sistemas,trabajar en sistemas Softtek,mx,es,20,brave
+BQ-014,Softtek,Opiniones del área de TI,opiniones área de TI Softtek,mx,es,20,brave
+BQ-015,Softtek,Ambiente laboral en sistemas,ambiente laboral sistemas Softtek,mx,es,20,brave
+BQ-016,Softtek,Entrevista de sistemas,entrevista puesto de sistemas Softtek,mx,es,20,brave
+BQ-017,Softtek,Liderazgo de sistemas,jefe o gerente de sistemas Softtek,mx,es,20,brave
+BQ-018,Softtek,Decisión sobre oferta de TI,aceptar oferta de TI Softtek,mx,es,20,brave
+BQ-019,MELCSA,Empleo en sistemas,trabajar en sistemas MELCSA,mx,es,20,brave
+BQ-020,MELCSA,Opiniones del área de TI,opiniones área de TI MELCSA,mx,es,20,brave
+BQ-021,MELCSA,Ambiente laboral en sistemas,ambiente laboral sistemas MELCSA,mx,es,20,brave
+BQ-022,MELCSA,Entrevista de sistemas,entrevista puesto de sistemas MELCSA,mx,es,20,brave
+BQ-023,MELCSA,Liderazgo de sistemas,jefe o gerente de sistemas MELCSA,mx,es,20,brave
+BQ-024,MELCSA,Decisión sobre oferta de TI,aceptar oferta de TI MELCSA,mx,es,20,brave
