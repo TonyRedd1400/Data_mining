@@ -3,11 +3,15 @@
 import argparse
 import csv
 import hashlib
+import ipaddress
 import json
 import os
+import re
+import socket
 import sqlite3
 import sys
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -21,6 +25,15 @@ CONFIG_COLUMNS = (
     "max_results", "provider",
 )
 BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
+USER_AGENT = "DirectorioLaboralMVP/0.1"
+MAX_HTML_BYTES = 1024 * 1024
+RETRIEVAL_COLUMNS = {"retrieval_attempted_at": "TEXT"}
+
+
+class RetrievalIssue(Exception):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
 
 
 def load_queries(path=CONFIG):
@@ -101,6 +114,7 @@ def init_db(path):
                 content_retrieved TEXT,
                 eligibility TEXT,
                 retrieval_status TEXT NOT NULL DEFAULT 'pending',
+                retrieval_attempted_at TEXT,
                 limitation TEXT,
                 exclusion_reason TEXT,
                 UNIQUE (bq_id, provider, url_norm)
@@ -126,6 +140,23 @@ def init_db(path):
                 hypothesis TEXT
             );
         """)
+        _ensure_retrieval_columns(db)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _ensure_retrieval_columns(db):
+    columns = {row[1] for row in db.execute("PRAGMA table_info(search_results)")}
+    for name, column_type in RETRIEVAL_COLUMNS.items():
+        if name not in columns:
+            db.execute(f"ALTER TABLE search_results ADD COLUMN {name} {column_type}")
+
+
+def migrate_db(path):
+    db = sqlite3.connect(path)
+    try:
+        _ensure_retrieval_columns(db)
         db.commit()
     finally:
         db.close()
@@ -206,6 +237,145 @@ def collect(bq_id, db_path, fixture=None, config_path=CONFIG):
         db.close()
 
 
+def _destination_parts(url):
+    try:
+        parts = urlsplit(url)
+        port = parts.port if parts.port is not None else (443 if parts.scheme.lower() == "https" else 80)
+        if (parts.scheme.lower() not in {"http", "https"} or not parts.hostname
+                or parts.username is not None or parts.password is not None
+                or port not in {80, 443}):
+            raise RetrievalIssue("blocked_destination")
+    except ValueError as exc:
+        raise RetrievalIssue("blocked_destination") from exc
+    return parts, port
+
+
+def _public_destination(url, resolver=None):
+    parts, port = _destination_parts(url)
+    try:
+        addresses = (resolver or socket.getaddrinfo)(parts.hostname, port, type=socket.SOCK_STREAM)
+        if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+            raise RetrievalIssue("blocked_destination")
+    except RetrievalIssue:
+        raise
+    except (OSError, ValueError, IndexError) as exc:
+        raise RetrievalIssue("network_error") from exc
+
+
+def _open_once(url, transport):
+    if transport is None:
+        raise RuntimeError("No hay transporte de egreso verificado para iniciar la recuperación.")
+    try:
+        return transport(url, headers={"User-Agent": USER_AGENT,
+                                       "Accept-Encoding": "identity"}, timeout=10)
+    except (TimeoutError, socket.timeout) as exc:
+        raise RetrievalIssue("timeout") from exc
+    except URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise RetrievalIssue("timeout") from exc
+        raise RetrievalIssue("network_error") from exc
+    except OSError as exc:
+        raise RetrievalIssue("network_error") from exc
+
+
+def _status(response):
+    return response.getcode() if hasattr(response, "getcode") else response.status
+
+
+def _header(response, name, default=""):
+    return response.headers.get(name, default)
+
+
+class _VisibleText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.hidden = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in {"script", "style"}:
+            self.hidden += 1
+
+    def handle_endtag(self, tag):
+        if tag.lower() in {"script", "style"} and self.hidden:
+            self.hidden -= 1
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def _retrieve_html(url, resolver=None, transport=None):
+    if transport is None:
+        raise RuntimeError("No hay transporte de egreso verificado para iniciar la recuperación.")
+    _public_destination(url, resolver)
+    response = _open_once(url, transport)
+    try:
+        status = _status(response)
+        if status != 200:
+            raise RetrievalIssue(f"http_{status}")
+        if _header(response, "Content-Type").split(";", 1)[0].strip().lower() != "text/html":
+            raise RetrievalIssue("unsupported_type")
+        if _header(response, "Content-Encoding", "identity").lower() not in {"", "identity"}:
+            raise RetrievalIssue("unsupported_type")
+        length = _header(response, "Content-Length")
+        if length and int(length) > MAX_HTML_BYTES:
+            raise RetrievalIssue("too_large")
+        body = response.read(MAX_HTML_BYTES + 1)
+        if len(body) > MAX_HTML_BYTES:
+            raise RetrievalIssue("too_large")
+        parser = _VisibleText()
+        parser.feed(body.decode("utf-8", errors="replace"))
+        parser.close()
+        text = re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
+        if not text:
+            raise RetrievalIssue("empty_text")
+        return text
+    except ValueError as exc:
+        raise RetrievalIssue("network_error") from exc
+    finally:
+        response.close()
+
+
+def retrieve_pending(bq_id, db_path, resolver=None, transport=None):
+    migrate_db(db_path)
+    db = sqlite3.connect(db_path)
+    counts = {"retrieved": 0, "limited": 0}
+    try:
+        rows = db.execute(
+            "SELECT id,url_original FROM search_results "
+            "WHERE bq_id=? AND retrieval_status='pending' ORDER BY position,id",
+            (bq_id,),
+        ).fetchall()
+        if rows and transport is None:
+            raise RuntimeError("No hay transporte de egreso verificado; las filas siguen pendientes.")
+        for result_id, url in rows:
+            attempted_at = datetime.now(timezone.utc).isoformat()
+            try:
+                content = _retrieve_html(url, resolver, transport)
+                db.execute("""
+                    UPDATE search_results SET content_retrieved=?, retrieval_status='retrieved',
+                    limitation=NULL, retrieval_attempted_at=? WHERE id=?
+                """, (content, attempted_at, result_id))
+                counts["retrieved"] += 1
+            except RetrievalIssue as issue:
+                db.execute("""
+                    UPDATE search_results SET content_retrieved=NULL, retrieval_status='limited',
+                    limitation=?, retrieval_attempted_at=? WHERE id=?
+                """, (issue.code, attempted_at, result_id))
+                counts["limited"] += 1
+            except Exception:
+                db.execute("""
+                    UPDATE search_results SET content_retrieved=NULL, retrieval_status='limited',
+                    limitation='network_error', retrieval_attempted_at=? WHERE id=?
+                """, (attempted_at, result_id))
+                counts["limited"] += 1
+            db.commit()
+        return counts
+    finally:
+        db.close()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Recolector mínimo de resultados Brave")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -216,6 +386,9 @@ def main(argv=None):
     collect_cmd.add_argument("--bq", required=True)
     collect_cmd.add_argument("--db", required=True)
     collect_cmd.add_argument("--fixture")
+    retrieve_cmd = commands.add_parser("retrieve")
+    retrieve_cmd.add_argument("--bq", required=True)
+    retrieve_cmd.add_argument("--db", required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "validate-config":
@@ -225,8 +398,13 @@ def main(argv=None):
             init_db(args.db)
             print(f"Base inicializada: {args.db}")
         else:
-            run_id = collect(args.bq, args.db, args.fixture)
-            print(f"Recolección completada; run_id={run_id}.")
+            if args.command == "collect":
+                run_id = collect(args.bq, args.db, args.fixture)
+                print(f"Recolección completada; run_id={run_id}.")
+            else:
+                counts = retrieve_pending(args.bq, args.db)
+                print(f"Recuperación completada: {counts['retrieved']} recuperadas, "
+                      f"{counts['limited']} limitadas.")
     except (OSError, sqlite3.Error, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
