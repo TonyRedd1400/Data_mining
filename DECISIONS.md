@@ -1,5 +1,42 @@
 # DECISIONS.md — Decisiones de arquitectura (ADR)
 
+> **Checkpoint vigente · 2026-11-03.** Las decisiones D-001…D-017 fueron un diseño previo y varias aún no existen en código. Las decisiones implementadas que siguen tienen precedencia cuando haya contradicciones. No deben inferirse `requests`, pydantic, YAML, un paquete `dlm`, Gemini, Notion o exportaciones a partir del diseño histórico.
+
+## Decisiones implementadas en el pipeline mínimo
+
+### D-018 · Un archivo Python, biblioteca estándar y SQLite
+**Estado: Implementada (`84e3b3c`)**
+- `pipeline.py` concentra el CLI y las tres tablas `runs`, `search_results` y `evidence`.
+- `queries.csv` contiene exactamente 24 BQ; no hay framework de agentes, servidor, dashboard ni dependencias Python externas.
+- Se prioriza Ponytail ULTRA: solo se modularizará cuando una necesidad comprobada lo justifique.
+
+### D-019 · Brave Search API como proveedor único del piloto
+**Estado: Implementada (`84e3b3c`)**
+- Cada BQ envía `country=mx`, `search_lang=es` y hasta 20 resultados.
+- La clave vive en `BRAVE_SEARCH_API_KEY`; no se guarda en Git.
+- Repetir una búsqueda crea un `run`, pero la restricción `(bq_id, provider, url_norm)` evita duplicar resultados.
+
+### D-020 · Recuperación mediante curl con IP pública fijada
+**Estado: Implementada (`c7d5fce`)**
+- El host se resuelve y se rechaza si alguna dirección no es pública.
+- `curl --resolve` conecta a la IP validada conservando host y TLS; se desactivan proxy, configuración externa y redirecciones.
+- Límites: 10 segundos, 1 MiB, protocolos HTTP/HTTPS y contenido `text/html` sin compresión.
+- Los fallos quedan como `limited` con motivo; una segunda ejecución no repite filas ya procesadas.
+
+### D-021 · Cuota Brave visible antes de ampliar la corrida
+**Estado: Pendiente inmediato**
+- El piloto BQ-002 consumió una sola búsqueda Brave; recuperar sus páginas no consume Brave.
+- Antes de otra corrida se leerán `X-RateLimit-Remaining` y `X-RateLimit-Reset` y se manejará `429` sin reintento automático.
+- El dashboard de Brave es la referencia definitiva de créditos.
+
+### D-022 · El piloto puede concluir “cero evidencia”
+**Estado: Implementada como regla metodológica**
+- BQ-002 produjo 18 resultados: 8 páginas recuperadas y 10 limitadas.
+- Los candidatos laborales accesibles por título pertenecían a Glassdoor, Indeed y OCC, pero no se recuperaron; las páginas recuperadas fueron principalmente turismo, tiendas o perfiles corporativos.
+- No se convierten snippets en evidencia ni se rellenan cupos con resultados irrelevantes.
+
+---
+
 Formato: ID · Título · Estado (`Cerrada` / `Propuesta` / `Abierta`) · Contexto · Decisión ·
 Alternativas descartadas · Consecuencias. Al implementarse, cada Cerrada se refleja como ADR corto
 en `docs/adr/`.
