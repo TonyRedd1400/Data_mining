@@ -5,6 +5,7 @@ Pipeline local para ejecutar las 24 búsquedas BQ, guardar resultados en SQLite 
 ## Estado
 
 - Implementado: configuración BQ, SQLite, Brave, deduplicación, recuperación HTML y reanudación.
+- Paridad validada contra el checkpoint inmutable `c6d1d86`; 14 pruebas offline.
 - Pendiente: elegibilidad, evidencias, clasificación, revisión humana y exportación.
 - Sin dependencias Python de ejecución.
 
