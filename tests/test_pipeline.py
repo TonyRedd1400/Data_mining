@@ -5,6 +5,7 @@ import socket
 import sqlite3
 import tempfile
 import unittest
+from types import SimpleNamespace
 from contextlib import contextmanager, redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
@@ -91,7 +92,7 @@ class PipelineTests(unittest.TestCase):
         html = b"<style>hidden css</style><script>hidden js</script><p>Visible  text</p>"
         calls = []
 
-        def transport(url, headers, timeout):
+        def transport(url, headers, timeout, pinned_ip):
             calls.append(url)
             if url == "https://limited.example/page":
                 return FakeResponse(404)
@@ -112,7 +113,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(calls, ["https://limited.example/page", "https://public.example/page"])
         self.assertEqual(pipeline.retrieve_pending(
             "BQ-002", self.db_path, self.public_resolver,
-            lambda url, headers, timeout: self.fail("retrieval repeated"),
+            lambda url, headers, timeout, pinned_ip: self.fail("retrieval repeated"),
         ), {"retrieved": 0, "limited": 0})
         self.assertEqual(calls, ["https://limited.example/page", "https://public.example/page"])
 
@@ -124,7 +125,7 @@ class PipelineTests(unittest.TestCase):
             ip = "127.0.0.1" if host == "private.example" else "93.184.216.34"
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
 
-        def transport(url, headers, timeout):
+        def transport(url, headers, timeout, pinned_ip):
             calls.append(url)
             return FakeResponse(200, b"<p>unexpected</p>", {"Content-Type": "text/html"})
 
@@ -138,7 +139,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(reason, "blocked_destination")
 
         public_id = self.add_pending(2, "https://public.example/page")
-        with redirect_stderr(io.StringIO()):
+        with patch.object(pipeline.shutil, "which", return_value=None), redirect_stderr(io.StringIO()):
             exit_code = pipeline.main(["retrieve", "--bq", "BQ-002", "--db", str(self.db_path)])
         self.assertEqual(exit_code, 2)
         self.assertEqual(calls, [])
@@ -148,6 +149,33 @@ class PipelineTests(unittest.TestCase):
                 (public_id,),
             ).fetchone()
         self.assertEqual((status, attempted), ("pending", None))
+
+    def test_curl_pins_public_ip_disables_proxy_and_redirects(self):
+        commands = []
+
+        def run(command, **kwargs):
+            commands.append(command)
+            Path(command[command.index("--output") + 1]).write_bytes(b"<p>simulated HTML</p>")
+            Path(command[command.index("--dump-header") + 1]).write_text(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 21\r\n\r\n",
+                encoding="ascii",
+            )
+            return SimpleNamespace(returncode=0, stderr=b"")
+
+        with patch.object(pipeline.shutil, "which", return_value="C:/curl.exe"), \
+             patch.object(pipeline.tempfile, "tempdir", self.temp.name), \
+             patch.object(pipeline.subprocess, "run", side_effect=run):
+            text = pipeline._retrieve_html(
+                "https://public.example/page", self.public_resolver,
+                pipeline._curl_transport(),
+            )
+        self.assertEqual(text, "simulated HTML")
+        command = commands[0]
+        self.assertIn("public.example:443:93.184.216.34", command)
+        self.assertEqual(command[command.index("--noproxy") + 1], "*")
+        self.assertEqual(command[command.index("--proto") + 1], "=http,https")
+        self.assertEqual(command[command.index("--max-redirs") + 1], "0")
+        self.assertIn("Accept-Encoding: identity", command)
 
     def test_init_db_creates_only_three_required_tables(self):
         with self.connect() as db:
