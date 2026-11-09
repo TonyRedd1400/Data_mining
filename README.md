@@ -1,34 +1,48 @@
-# Directorio Laboral México — Sistema de investigación de demanda (BQ-001…BQ-024)
+# Data Mining · Investigación de demanda
 
-Repositorio reutilizado como sede del pipeline local de investigación de demanda.
-Estado actual: **fase de diseño** (sin código de producto todavía).
+Pipeline local para ejecutar las 24 búsquedas BQ, guardar resultados en SQLite y recuperar HTML público con trazabilidad.
 
-## Documentos de diseño
+## Estado
 
-| Documento | Contenido |
-|---|---|
-| [SPEC.md](SPEC.md) | Alcance, requisitos funcionales/no funcionales, elegibilidad, supuestos pendientes |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Componentes, flujo de datos, contratos, errores, idempotencia, dedup, seguridad |
-| [DATA_MODEL.md](DATA_MODEL.md) | Tablas SQLite, máquinas de estado, inmutabilidad, esquemas de exportación |
-| [DECISIONS.md](DECISIONS.md) | ADRs D-001…D-017 con estado (cerradas / propuestas) + registro de correcciones C-01…C-08 |
-| [ACCEPTANCE_TESTS.md](ACCEPTANCE_TESTS.md) | AT-01…AT-18 ejecutables en PowerShell (mayoría en modo mock) |
-| [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | Hitos 0–10, cada uno verificable |
+- Implementado: configuración BQ, SQLite, Brave, deduplicación, recuperación HTML y reanudación.
+- Paridad validada contra el checkpoint inmutable `c6d1d86`; 14 pruebas offline.
+- Pendiente: elegibilidad, evidencias, clasificación, revisión humana y exportación.
+- Sin dependencias Python de ejecución.
 
-## Reglas del proyecto
+## Estructura
 
-- Rama de trabajo: `feature/bq-research-pipeline` (nada se commitea directo a `main`).
-- Repo **público**: prohibido subir claves, `.env` real, bases de datos operativas (`data/`),
-  resultados crudos completos (`exports/`, `logs/`) o información personal. Solo `.env.example`.
-- Los textos originales de búsqueda nunca se modifican; las clasificaciones del LLM viven aparte.
-- Sin scraping de Google ni evasión de captchas/robots.txt: solo APIs oficiales vía adaptadores.
-
-## Preparación (PowerShell)
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt   # a partir del Hito 1
-Copy-Item .env.example .env       # editar con claves propias; nunca commitear
+```text
+src/data_mining/   código del pipeline
+tests/             pruebas offline y fixtures
+config/            consultas operativas
+docs/              contrato, decisiones y diseño
+pipeline.py        entrada compatible
+pyproject.toml     metadatos del paquete
 ```
 
-El pipeline aún no está implementado; ver IMPLEMENTATION_PLAN.md para el orden de construcción.
+La decisión y sus límites están en [docs/ORGANIZATION.md](docs/ORGANIZATION.md).
+
+## Uso
+
+```powershell
+python pipeline.py validate-config
+python pipeline.py init-db --db investigacion.sqlite
+python pipeline.py collect --bq BQ-002 --db investigacion.sqlite
+python pipeline.py retrieve --bq BQ-002 --db investigacion.sqlite
+python -m unittest discover -s tests -v
+```
+
+Para pruebas sin red:
+
+```powershell
+python pipeline.py collect --bq BQ-002 --db investigacion.sqlite --fixture tests\fixtures\brave_bq002.json
+```
+
+## Documentación
+
+- [Contrato MVP](docs/MVP_CONTRACT.md)
+- [Arquitectura](docs/ARCHITECTURE.md)
+- [Modelo de datos](docs/DATA_MODEL.md)
+- [Decisiones](docs/DECISIONS.md)
+- [Plan](docs/IMPLEMENTATION_PLAN.md)
+- [Pruebas de aceptación](docs/ACCEPTANCE_TESTS.md)

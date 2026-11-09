@@ -1,0 +1,21 @@
+{
+  "web": {
+    "results": [
+      {
+        "title": "Opiniones sobre TI en Liverpool",
+        "url": "https://example.com/liverpool-ti/?utm_source=brave",
+        "description": "Fixture: reseña de una experiencia laboral en el área de TI."
+      },
+      {
+        "title": "Vacantes de tecnología",
+        "url": "https://jobs.example.org/liverpool",
+        "description": "Fixture: información general de vacantes en tecnología."
+      },
+      {
+        "title": "Opiniones sobre TI en Liverpool, variante duplicada",
+        "url": "https://EXAMPLE.com/liverpool-ti?fbclid=fixture",
+        "description": "Fixture duplicado con parámetro de tracking."
+      }
+    ]
+  }
+}

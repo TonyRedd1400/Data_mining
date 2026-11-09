@@ -1,5 +1,43 @@
 # IMPLEMENTATION_PLAN.md — Plan de implementación por hitos pequeños
 
+## Checkpoint real · 2026-11-03
+
+El plan original que sigue se conserva como referencia histórica; no representa el orden real ejecutado. El MVP actual se construyó con Ponytail ULTRA y tiene este estado:
+
+| Entrega real | Estado | Rama / commit | Validación |
+|---|---|---|---|
+| DM-M1 · Contrato mínimo | Terminada | `feat/ponytail-mvp-contract` / `d2fca6c` | Contrato revisado |
+| DM-M2 · Configuración, SQLite y búsqueda Brave | Terminada | `feat/ponytail-mvp` / `84e3b3c` | 9 pruebas en ese checkpoint |
+| DM-M3 · Recuperación HTML inyectable | Terminada | `feat/content-retrieval` / `a5546e0` | 11 pruebas en ese checkpoint |
+| DM-M3B · Egreso curl con IP fijada | Terminada | `feat/curl-egress` / `c7d5fce` | 12/12 pruebas actuales |
+| Piloto real BQ-002 | Terminado | Base local no versionada | 18 resultados; 8 recuperados; 10 limitados; 0 evidencias |
+
+### Gate de migración modular · 2026-11-04
+
+- Referencia: commit inmutable `c6d1d86`, extraído por Git a temporales.
+- Validación: `tests/test_parity.py` compara CLI, hashes, esquema, datos, deduplicación, recuperación simulada, seguridad curl y reanudación sin red real.
+- Resultado: 14/14 pruebas offline y `git diff --check` limpios.
+- Piloto: copia temporal íntegra; 1 run, 18 resultados, 8 recuperados, 10 limitados y 0 evidencias.
+- Protección: SHA-256 original antes y después `A5D1E128AF6EFFC92ADA06F7B68F9F28F0DC077CD0C88DD2AE2E839FF0B697A7`.
+- Decisión: `refactor/modular-pipeline` pasa a ser la rama activa; el original se conserva hasta completar el siguiente hito.
+
+### Siguiente hito mínimo
+
+1. Leer y mostrar los encabezados de cuota Brave (`Remaining` y `Reset`).
+2. Ante `429`, detener la corrida sin reintentar ni crear resultados falsos.
+3. Probar una consulta BQ-002 más específica, sin reemplazar la oficial hasta comparar ambos pilotos.
+4. Registrar elegibilidad y razones de exclusión antes de implementar clasificación o exportación.
+
+### Todavía no existe
+
+- Extracción de fragmentos de evidencia.
+- Clasificación estructurada o LLM.
+- Cola de revisión humana.
+- Hallazgos y exportación CSV/Notion.
+- Paquete `dlm`, YAML, pydantic, `requests`, Gemini, dashboard o interfaz web.
+
+---
+
 Cada hito produce algo **usable y verificable**, commiteado en `feature/bq-research-pipeline`.
 Tamaño objetivo: 1 sesión de trabajo (2–6 h). No se avanza de hito con su prueba en rojo.
 Los comandos citados son PowerShell y corresponden a la arquitectura ya diseñada.
